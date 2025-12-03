@@ -1,65 +1,54 @@
 print(">>> bot.py loaded")
 
-# Word Assassin Game Bot – Pro Version (Single Group State)
+# Word Assassin Bot – Full Pro Version with Environment BOT_TOKEN
 
+import os
+import json
+import random
+import re
 from telegram import (
     Update,
-    InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InlineKeyboardButton
 )
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
-    filters,
     ContextTypes,
+    filters
 )
-from telegram.request import HTTPXRequest
 from telegram.constants import ParseMode
-
-import random
-import json
-import re
-import os
+from telegram.request import HTTPXRequest
 
 DATA_FILE = "game.json"
-BOT_USERNAME = "WordAssassinGameBot"  # without @
+BOT_USERNAME = "WordAssassinGameBot"   # Without @
 
-# ---------------------------------------------------------
-# WORD LISTS + DIFFICULTY
-# ---------------------------------------------------------
-COMMON_WORDS_EASY = [
-    "hello", "yes", "bro", "ok", "sorry", "good", "thanks", "hi"
-]
+# Load token from ENV
+BOT_TOKEN = os.getenv("BOT_TOKEN")     # <<< DO NOT CHANGE THIS
 
-COMMON_WORDS_MEDIUM = [
-    "tomorrow", "night", "wait", "where", "come", "why", "later"
-]
-
-COMMON_WORDS_HARD = [
-    "probably", "actually", "honestly", "between", "seriously"
-]
+# Word Difficulty Pools
+COMMON_WORDS_EASY = ["hello","yes","bro","ok","sorry","good","thanks","hi"]
+COMMON_WORDS_MEDIUM = ["tomorrow","night","wait","where","come","why","later"]
+COMMON_WORDS_HARD = ["probably","actually","honestly","between","seriously"]
 
 DIFFICULTY_WORDS = {
     "easy": COMMON_WORDS_EASY,
     "medium": COMMON_WORDS_MEDIUM,
-    "hard": COMMON_WORDS_HARD,
+    "hard": COMMON_WORDS_HARD
 }
 
 DEFAULT_DIFFICULTY = "medium"
 
-# ---------------------------------------------------------
-# BASIC LOAD / SAVE SYSTEM
-# ---------------------------------------------------------
+# ---------------------- STORAGE ----------------------
 def initial_state():
     return {
         "lobby": {"players": [], "status": "waiting"},
         "players": {},
         "difficulty": DEFAULT_DIFFICULTY,
-        "teams": {},
+        "teams": {}
     }
-
 
 def load():
     if not os.path.exists(DATA_FILE):
@@ -67,283 +56,205 @@ def load():
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-    except Exception:
+    except:
         return initial_state()
-
-    # Ensure keys
     data.setdefault("lobby", {"players": [], "status": "waiting"})
     data.setdefault("players", {})
     data.setdefault("difficulty", DEFAULT_DIFFICULTY)
     data.setdefault("teams", {})
-
     return data
-
 
 def save(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+        json.dump(data, f, indent=4)
 
-
-def get_words_for_difficulty(level: str):
-    return DIFFICULTY_WORDS.get(level, COMMON_WORDS_MEDIUM)
-
-
-def html_escape(text: str) -> str:
+def html_escape(t: str):
     return (
-        text.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
+        t.replace("&","&amp;")
+         .replace("<","&lt;")
+         .replace(">","&gt;")
     )
 
+def get_words(level):
+    return DIFFICULTY_WORDS.get(level, COMMON_WORDS_MEDIUM)
 
-# ---------------------------------------------------------
-# /start and /help – PM vs GROUP
-# ---------------------------------------------------------
+# ---------------------- START / HELP ----------------------
 async def start_or_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
 
-    # PRIVATE CHAT: show inline menu + add-to-group button
+    # PM Menu
     if chat.type == "private":
         text = (
-            "<b>Word Assassin Bot</b>\n\n"
-            "I’m a social deception game for groups.\n\n"
-            "1️⃣ Add me to a group\n"
-            "2️⃣ In that group use <code>/startgame</code>\n"
-            "3️⃣ Players tap <b>Join Game</b>\n"
-            "4️⃣ Admin uses <code>/forcestart</code>\n\n"
-            "Choose an option below:"
+            "<b>Word Assassin Pro</b>\n\n"
+            "A deception game for Telegram groups.\n"
+            "Choose an option:"
         )
-
         keyboard = [
             [
                 InlineKeyboardButton("How to Play 🎮", callback_data="how_play"),
-                InlineKeyboardButton("Tutorial 🎬", callback_data="tutorial"),
+                InlineKeyboardButton("Tutorial 🎬", callback_data="tutorial")
             ],
             [InlineKeyboardButton("PM Leaderboard 🏆", callback_data="lb_pm")],
             [
                 InlineKeyboardButton(
                     "➕ Add me to a Group",
-                    url=f"https://t.me/{BOT_USERNAME}?startgroup=true",
+                    url=f"https://t.me/{BOT_USERNAME}?startgroup=true"
                 )
-            ],
+            ]
         ]
-
         await update.message.reply_text(
-            text,
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(keyboard),
+            text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
 
-    # GROUP CHAT: show commands list
-    commands_text = (
+    # Group help
+    msg = (
         "<b>Word Assassin – Commands</b>\n\n"
-        "<b>Core Game</b>\n"
+        "<b>Game</b>\n"
         "/startgame – Open lobby\n"
         "/forcestart – Start game (admin)\n"
         "/leave – Leave lobby\n"
-        "/kick @user – Kick from lobby (admin)\n\n"
-        "<b>Gameplay Settings</b>\n"
-        "/difficulty easy|medium|hard – Set kill word difficulty (admin)\n"
-        "/team TeamName – Join a team\n\n"
-        "<b>Info & Control</b>\n"
-        "/leaderboard – Show current leaderboard\n"
-        "/clearleaderboard – Wipe leaderboard (admin)\n"
-        "/resetgame – Full reset of game state (admin)\n"
-        "/rules – Show game rules\n"
-        "/status – Show current game status\n"
+        "/kick – Kick lobby player (admin)\n\n"
+        "<b>Settings</b>\n"
+        "/difficulty easy|medium|hard\n"
+        "/team TeamName\n\n"
+        "<b>Info</b>\n"
+        "/leaderboard\n"
+        "/clearleaderboard\n"
+        "/resetgame\n"
+        "/rules\n"
+        "/status\n"
     )
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
-    await update.message.reply_text(commands_text, parse_mode=ParseMode.HTML)
-
-
-# ---------------------------------------------------------
-# INLINE MENU CALLBACK HANDLER (PM)
-# ---------------------------------------------------------
+# ---------------------- INLINE CALLBACKS ----------------------
 async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    data_id = query.data
+    q = update.callback_query
+    data = q.data
 
-    if data_id == "how_play":
-        text = (
-            "<b>How to Play – Word Assassin</b>\n\n"
-            "1️⃣ Add bot to a group & make it admin.\n"
-            "2️⃣ Use <code>/startgame</code> to open lobby.\n"
-            "3️⃣ Players tap <b>Join Game</b>.\n"
-            "4️⃣ Admin uses <code>/forcestart</code>.\n"
-            "5️⃣ You get a target + kill word in DM.\n"
-            "6️⃣ Trick your target into typing that word in the group.\n"
-            "7️⃣ Bot announces kills & reassigns targets.\n\n"
-            "Last assassin standing or with most kills wins. 🔥"
+    if data == "how_play":
+        txt = (
+            "<b>How to Play</b>\n\n"
+            "1. Add bot to group\n"
+            "2. /startgame → players join\n"
+            "3. /forcestart → assignments sent\n"
+            "4. Trick target to say the kill word\n"
+            "5. Eliminate, chain continues\n"
         )
-        await query.message.edit_text(text, parse_mode=ParseMode.HTML)
+        await q.message.edit_text(txt, parse_mode=ParseMode.HTML)
 
-    elif data_id == "tutorial":
+    elif data == "tutorial":
         steps = [
-            "🎬 <b>Tutorial – Step 1/4</b>\nAdd me to a group and make me admin.",
-            "🎬 <b>Tutorial – Step 2/4</b>\nIn that group, type <code>/startgame</code>. Players tap <b>Join Game</b>.",
-            "🎬 <b>Tutorial – Step 3/4</b>\nAdmin types <code>/forcestart</code>. You’ll get your target & kill word here in DM.",
-            "🎬 <b>Tutorial – Step 4/4</b>\nChat naturally, trick your target into typing that word. 💥",
+            "Step 1: Add bot to group & make admin",
+            "Step 2: /startgame → Join button",
+            "Step 3: /forcestart → target & kill word in DM",
+            "Step 4: Trick target to say the word"
         ]
-        await query.message.edit_text(steps[0], parse_mode=ParseMode.HTML)
+        await q.message.edit_text("🎬 <b>Tutorial</b>\n\n"+steps[0], parse_mode=ParseMode.HTML)
         for s in steps[1:]:
-            await query.message.chat.send_message(s, parse_mode=ParseMode.HTML)
+            await q.message.chat.send_message(s, parse_mode=ParseMode.HTML)
 
-    elif data_id == "lb_pm":
-        data = load()
-        players = data.get("players", {})
-        if not players:
-            await query.answer("No games played yet.", show_alert=True)
+    elif data == "lb_pm":
+        db = load()
+        pl = db["players"]
+        if not pl:
+            await q.answer("No data", show_alert=True)
             return
 
-        sorted_players = sorted(
-            players.items(),
-            key=lambda kv: kv[1].get("kills", 0),
-            reverse=True,
-        )
-
+        sorted_pl = sorted(pl.items(), key=lambda x: x[1]["kills"], reverse=True)
         msg = "🏆 <b>Global Leaderboard</b>\n\n"
-        rank = 1
-        for pid, info in sorted_players:
-            uname = html_escape(info.get("username") or str(pid))
-            kills = info.get("kills", 0)
-            msg += f"{rank}. @{uname} — {kills} kills\n"
-            rank += 1
+        r = 1
+        for pid, info in sorted_pl:
+            msg += f"{r}. @{html_escape(info['username'])} — {info['kills']} kills\n"
+            r += 1
+        await q.message.edit_text(msg, parse_mode=ParseMode.HTML)
 
-        await query.message.edit_text(msg, parse_mode=ParseMode.HTML)
+    await q.answer()
 
-    await query.answer()
-
-
-# ---------------------------------------------------------
-# /rules
-# ---------------------------------------------------------
+# ---------------------- RULES ----------------------
 async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "<b>Word Assassin – Rules</b>\n\n"
-        "• You will receive a secret <b>target</b> and a <b>kill word</b> in DM.\n"
-        "• Your goal is to make your target type that word in the group chat.\n"
-        "• You cannot force them (no “type this word”), you must trick them.\n"
-        "• Once they type the exact word, you eliminate them.\n"
-        "• You then get a new target and a new kill word.\n"
-        "• Last player alive or with the most kills wins.\n\n"
-        "<b>Fair play:</b>\n"
-        "• No spamming long word lists.\n"
-        "• No telling others their kill words.\n"
-        "• Admin can reset or clear leaderboard if needed.\n"
+    txt = (
+        "<b>Rules</b>\n\n"
+        "• You get a target + kill word in DM\n"
+        "• Trick target to say that exact word\n"
+        "• You kill them → get new target\n"
+        "• Last alive wins\n\n"
+        "No spamming, no revealing your word."
     )
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+    await update.message.reply_text(txt, parse_mode=ParseMode.HTML)
 
-
-# ---------------------------------------------------------
-# /startgame → OPEN LOBBY
-# ---------------------------------------------------------
+# ---------------------- START GAME ----------------------
 async def startgame(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
-    if chat.type not in ("group", "supergroup"):
-        await update.message.reply_text("Use /startgame in a group.")
+    if chat.type not in ("group","supergroup"):
+        await update.message.reply_text("Use /startgame in group")
         return
 
-    data = initial_state()
-    save(data)
+    save(initial_state())
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🎮 Join Game", callback_data="join")]])
+    await update.message.reply_text("Lobby open!", reply_markup=kb)
 
-    keyboard = [[InlineKeyboardButton("🎮 Join Game", callback_data="join")]]
-
-    await update.message.reply_text(
-        "🎮 WORD ASSASSIN LOBBY OPEN!\nPress the button to join.",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-
-
-# ---------------------------------------------------------
-# JOIN GAME (GROUP BUTTON)
-# ---------------------------------------------------------
+# ---------------------- JOIN ----------------------
 async def join_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user = query.from_user
-    chat = query.message.chat
+    q = update.callback_query
+    u = q.from_user
+    chat = q.message.chat
 
-    if chat.type not in ("group", "supergroup"):
-        await query.answer("Join from the game group.", show_alert=True)
+    if chat.type not in ("group","supergroup"):
+        await q.answer("Join from group", show_alert=True)
         return
 
-    data = load()
-    lobby = data["lobby"]
-
-    if lobby["status"] != "waiting":
-        await query.answer("Game already started.", show_alert=True)
+    db = load()
+    if db["lobby"]["status"] != "waiting":
+        await q.answer("Game already started", show_alert=True)
         return
 
-    if user.id in lobby["players"]:
-        await query.answer("You already joined.", show_alert=True)
-        return
-
-    # Try DM first (Telegram rule: user must start bot)
+    # DM permission check
     try:
-        await context.bot.send_message(
-            chat_id=user.id,
-            text="You joined Word Assassin.\nI will send your missions here in DM."
-        )
-    except Exception:
-        await query.answer(
-            "Open me in private & press START, then join again.",
-            show_alert=True,
-        )
+        await context.bot.send_message(u.id, "Joined. Missions will come here.")
+    except:
+        await q.answer("Open bot in DM & press START, then join again.", show_alert=True)
         return
 
-    lobby["players"].append(user.id)
-    save(data)
+    if u.id not in db["lobby"]["players"]:
+        db["lobby"]["players"].append(u.id)
+        save(db)
+        await chat.send_message(f"🟢 @{u.username} joined!")
+    await q.answer()
 
-    await chat.send_message(f"🟢 @{user.username} joined the game!")
-    await query.answer()
-
-
-# ---------------------------------------------------------
-# LEAVE LOBBY
-# ---------------------------------------------------------
+# ---------------------- LEAVE ----------------------
 async def leave(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    data = load()
-
-    if uid in data["lobby"]["players"]:
-        data["lobby"]["players"].remove(uid)
-        save(data)
-        await update.message.reply_text("🚪 You left the game.")
+    db = load()
+    if uid in db["lobby"]["players"]:
+        db["lobby"]["players"].remove(uid)
+        save(db)
+        await update.message.reply_text("You left.")
     else:
-        await update.message.reply_text("You are not in the lobby.")
+        await update.message.reply_text("Not in lobby.")
 
-
-# ---------------------------------------------------------
-# /team – REGISTER TEAM
-# ---------------------------------------------------------
+# ---------------------- TEAM ----------------------
 async def team(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Usage: /team TeamName")
+        await update.message.reply_text("Use: /team Name")
         return
+    name = " ".join(context.args)
+    db = load()
+    db["teams"][str(update.effective_user.id)] = name
+    save(db)
+    await update.message.reply_text(f"Team set: {name}")
 
-    team_name = " ".join(context.args).strip()
-    data = load()
-    data["teams"][str(update.effective_user.id)] = team_name
-    save(data)
-
-    await update.message.reply_text(
-        f"✅ @{update.effective_user.username} joined team: {team_name}"
-    )
-
-
-# ---------------------------------------------------------
-# /difficulty – SET DIFFICULTY (ADMIN)
-# ---------------------------------------------------------
+# ---------------------- DIFFICULTY ----------------------
 async def difficulty(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
-    if chat.type not in ("group", "supergroup"):
-        await update.message.reply_text("Use /difficulty in a group.")
+    db = load()
+
+    if chat.type not in ("group","supergroup"):
+        await update.message.reply_text("Use in group.")
         return
 
-    user = update.effective_user
-    admins = await context.bot.get_chat_administrators(chat.id)
-    admin_ids = [a.user.id for a in admins]
-    if user.id not in admin_ids:
+    admins = [a.user.id for a in await context.bot.get_chat_administrators(chat.id)]
+    if update.effective_user.id not in admins:
         await update.message.reply_text("Admins only.")
         return
 
@@ -353,311 +264,226 @@ async def difficulty(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     level = context.args[0].lower()
     if level not in DIFFICULTY_WORDS:
-        await update.message.reply_text("Invalid difficulty.")
+        await update.message.reply_text("Invalid level.")
         return
 
-    data = load()
-    data["difficulty"] = level
-    save(data)
+    db["difficulty"] = level
+    save(db)
+    await update.message.reply_text(f"Difficulty set: {level}")
 
-    await update.message.reply_text(f"✅ Difficulty set to: {level}")
-
-
-# ---------------------------------------------------------
-# /forcestart – ASSIGN TARGETS (ADMIN)
-# ---------------------------------------------------------
+# ---------------------- FORCE START ----------------------
 async def forcestart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
-    if chat.type not in ("group", "supergroup"):
-        await update.message.reply_text("Use /forcestart in a group.")
+    if chat.type not in ("group","supergroup"):
+        await update.message.reply_text("Use in group.")
         return
 
-    user = update.effective_user
-    admins = await context.bot.get_chat_administrators(chat.id)
-    admin_ids = [a.user.id for a in admins]
-    if user.id not in admin_ids:
+    admins = [a.user.id for a in await context.bot.get_chat_administrators(chat.id)]
+    if update.effective_user.id not in admins:
         await update.message.reply_text("Admins only.")
         return
 
-    data = load()
-    players = data["lobby"]["players"]
+    db = load()
+    players = db["lobby"]["players"]
 
     if len(players) < 2:
-        await update.message.reply_text("Need at least 2 players.")
+        await update.message.reply_text("Need 2+ players.")
         return
 
     random.shuffle(players)
-    data["players"] = {}
-    words_pool = get_words_for_difficulty(data["difficulty"])
+    db["players"] = {}
+    level = db["difficulty"]
+    pool = get_words(level)
 
-    # Assign circular targets
-    for i, p in enumerate(players):
-        target = players[(i + 1) % len(players)]
-        kill_word = random.choice(words_pool)
+    for i,p in enumerate(players):
+        target = players[(i+1) % len(players)]
+        kill = random.choice(pool)
 
-        member = await context.bot.get_chat_member(chat.id, p)
-        target_member = await context.bot.get_chat_member(chat.id, target)
+        cm = await context.bot.get_chat_member(chat.id, p)
+        tm = await context.bot.get_chat_member(chat.id, target)
 
-        username = member.user.username or str(member.user.id)
-        target_username = target_member.user.username or str(target_member.user.id)
+        pu = cm.user.username or str(p)
+        tu = tm.user.username or str(target)
 
-        data["players"][str(p)] = {
-            "username": username,
+        db["players"][str(p)] = {
+            "username": pu,
             "target": target,
-            "kill_word": kill_word,
+            "kill_word": kill,
             "alive": True,
-            "kills": 0,
+            "kills": 0
         }
 
         try:
             await context.bot.send_message(
-                chat_id=p,
-                text=(
-                    "<b>Your Assignment</b>\n\n"
-                    f"Target: @{html_escape(target_username)}\n"
-                    f"Kill word: <b>{html_escape(kill_word)}</b>\n\n"
-                    "Talk normally in the group and make them say it."
-                ),
-                parse_mode=ParseMode.HTML,
+                p,
+                f"<b>Your Target</b>\n@{tu}\n<b>Word:</b> {kill}",
+                parse_mode=ParseMode.HTML
             )
-        except Exception:
-            await chat.send_message(
-                f"⚠️ @{username} could not be DM'ed. "
-                "Ask them to press START in DM before next game."
-            )
+        except:
+            await chat.send_message(f"⚠️ Cannot DM @{pu}. They must press START.")
 
-    data["lobby"]["status"] = "locked"
-    save(data)
+    db["lobby"]["status"] = "locked"
+    save(db)
+    await update.message.reply_text(f"🔥 Game started! Difficulty: {level}")
 
-    await update.message.reply_text(
-        f"🔥 Game started! Difficulty: {data['difficulty']}"
-    )
-
-
-# ---------------------------------------------------------
-# /kick – REMOVE FROM LOBBY (ADMIN)
-# ---------------------------------------------------------
+# ---------------------- KICK ----------------------
 async def kick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
-    if chat.type not in ("group", "supergroup"):
-        await update.message.reply_text("Use /kick in a group.")
+    if chat.type not in ("group","supergroup"):
+        await update.message.reply_text("Use in group.")
         return
 
-    user = update.effective_user
-    admins = await context.bot.get_chat_administrators(chat.id)
-    admin_ids = [a.user.id for a in admins]
-    if user.id not in admin_ids:
+    admins = [a.user.id for a in await context.bot.get_chat_administrators(chat.id)]
+    if update.effective_user.id not in admins:
         await update.message.reply_text("Admins only.")
         return
 
     if not context.args:
-        await update.message.reply_text("Usage: /kick @username")
+        await update.message.reply_text("Usage: /kick @user")
         return
 
-    to_kick = context.args[0].replace("@", "")
-    data = load()
-
+    username = context.args[0].replace("@","")
+    db = load()
     remove_id = None
-    for pid in data["lobby"]["players"]:
+
+    for pid in db["lobby"]["players"]:
         m = await context.bot.get_chat_member(chat.id, pid)
-        if (m.user.username or "").lower() == to_kick.lower():
+        if (m.user.username or "").lower() == username.lower():
             remove_id = pid
             break
 
     if remove_id:
-        data["lobby"]["players"].remove(remove_id)
-        save(data)
-        await update.message.reply_text(f"❌ @{to_kick} removed from lobby.")
+        db["lobby"]["players"].remove(remove_id)
+        save(db)
+        await update.message.reply_text(f"Removed @{username}")
     else:
-        await update.message.reply_text("User not found in lobby.")
+        await update.message.reply_text("Not found.")
 
-
-# ---------------------------------------------------------
-# /leaderboard – GROUP LEADERBOARD
-# ---------------------------------------------------------
+# ---------------------- LEADERBOARD ----------------------
 async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = load()
-    players = data.get("players", {})
-    teams = data.get("teams", {})
-
-    if not players:
-        await update.message.reply_text("No game data yet.")
+    db = load()
+    pl = db["players"]
+    if not pl:
+        await update.message.reply_text("No game yet.")
         return
 
-    sorted_players = sorted(
-        players.items(),
-        key=lambda kv: kv[1].get("kills", 0),
-        reverse=True,
-    )
-
+    sorted_pl = sorted(pl.items(), key=lambda x: x[1]["kills"], reverse=True)
     msg = "🏆 <b>Leaderboard</b>\n\n"
-    r = 1
-    for pid, info in sorted_players:
-        name = html_escape(info["username"])
-        kills = info["kills"]
-        teamname = teams.get(str(pid))
-        if teamname:
-            msg += f"{r}. @{name} [{teamname}] — {kills} kills\n"
-        else:
-            msg += f"{r}. @{name} — {kills} kills\n"
-        r += 1
+    i = 1
+    for pid, info in sorted_pl:
+        msg += f"{i}. @{html_escape(info['username'])} — {info['kills']} kills\n"
+        i += 1
 
     await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
-
-# ---------------------------------------------------------
-# /clearleaderboard – ADMIN
-# ---------------------------------------------------------
+# ---------------------- CLEAR LEADERBOARD ----------------------
 async def clear_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
-    if chat.type not in ("group", "supergroup"):
-        await update.message.reply_text("Use /clearleaderboard in the game group.")
+    if chat.type not in ("group","supergroup"):
+        await update.message.reply_text("Use in group.")
         return
 
-    user = update.effective_user
-    admins = await context.bot.get_chat_administrators(chat.id)
-    admin_ids = [a.user.id for a in admins]
-    if user.id not in admin_ids:
+    admins = [a.user.id for a in await context.bot.get_chat_administrators(chat.id)]
+    if update.effective_user.id not in admins:
         await update.message.reply_text("Admins only.")
         return
 
-    data = load()
-    data["players"] = {}
-    save(data)
+    db = load()
+    db["players"] = {}
+    save(db)
 
-    await update.message.reply_text("🧹 Leaderboard cleared.")
+    await update.message.reply_text("Leaderboard cleared.")
 
-
-# ---------------------------------------------------------
-# /resetgame – FULL RESET (ADMIN)
-# ---------------------------------------------------------
+# ---------------------- RESET GAME ----------------------
 async def resetgame(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
-    if chat.type not in ("group", "supergroup"):
-        await update.message.reply_text("Use /resetgame in the game group.")
+    if chat.type not in ("group","supergroup"):
+        await update.message.reply_text("Use in group.")
         return
 
-    user = update.effective_user
-    admins = await context.bot.get_chat_administrators(chat.id)
-    admin_ids = [a.user.id for a in admins]
-    if user.id not in admin_ids:
+    admins = [a.user.id for a in await context.bot.get_chat_administrators(chat.id)]
+    if update.effective_user.id not in admins:
         await update.message.reply_text("Admins only.")
         return
 
-    data = initial_state()
-    save(data)
+    save(initial_state())
+    await update.message.reply_text("Game reset.")
 
-    await update.message.reply_text("♻️ Game state fully reset.")
-
-
-# ---------------------------------------------------------
-# /status – SHOW CURRENT GAME STATUS
-# ---------------------------------------------------------
+# ---------------------- STATUS ----------------------
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = load()
-    players = data.get("players", {})
-    lobby = data.get("lobby", {})
+    db = load()
+    lobby = db["lobby"]
+    players = db["players"]
 
-    lobby_count = len(lobby.get("players", []))
-    if not players:
-        text = (
-            "<b>Game Status</b>\n\n"
-            f"Lobby players: {lobby_count}\n"
-            "No active game yet.\n"
-        )
-        await update.message.reply_text(text, parse_mode=ParseMode.HTML)
-        return
-
-    alive = [p for p in players.values() if p.get("alive")]
-    dead = [p for p in players.values() if not p.get("alive")]
-
-    text = (
-        "<b>Game Status</b>\n\n"
-        f"Lobby players (before start): {lobby_count}\n"
-        f"Alive: {len(alive)}\n"
-        f"Eliminated: {len(dead)}\n\n"
+    t = (
+        "<b>Status</b>\n\n"
+        f"Lobby players: {len(lobby['players'])}\n"
+        f"Active players: {len(players)}\n"
     )
 
-    if alive:
-        text += "Alive players:\n"
-        for p in alive:
-            text += f"• @{html_escape(p['username'])}\n"
+    await update.message.reply_text(t, parse_mode=ParseMode.HTML)
 
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
-
-
-# ---------------------------------------------------------
-# MESSAGE CHECKER – KILL SYSTEM
-# ---------------------------------------------------------
+# ---------------------- KILL ENGINE ----------------------
 async def check_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
-    if chat.type not in ("group", "supergroup"):
+    if chat.type not in ("group","supergroup"):
         return
 
-    message = update.message
-    if not message or not message.text:
+    msg = update.message
+    if not msg or not msg.text:
         return
 
-    text = message.text.lower()
-    victim_id = str(message.from_user.id)
+    text = msg.text.lower()
+    victim_id = str(msg.from_user.id)
 
-    data = load()
-    players = data.get("players", {})
+    db = load()
+    players = db["players"]
 
     if victim_id not in players:
         return
 
     for killer_id, info in players.items():
-        if not info.get("alive", True):
+        if not info["alive"]:
             continue
 
-        if str(info.get("target")) != victim_id:
+        if str(info["target"]) != victim_id:
             continue
 
-        kill_word = info.get("kill_word", "").lower()
-        if not kill_word:
-            continue
+        word = info["kill_word"].lower()
 
-        # basic anti-cheat: ignore very long messages
-        if len(text) > 300:
+        if re.search(rf"\b{re.escape(word)}\b", text):
+            killer = info["username"]
+            victim = players[victim_id]["username"]
+
+            info["kills"] += 1
+            players[victim_id]["alive"] = False
+
+            new_target = players[victim_id]["target"]
+            new_word = random.choice(get_words(db["difficulty"]))
+
+            info["target"] = new_target
+            info["kill_word"] = new_word
+
+            save(db)
+
+            # announce
+            await chat.send_message(
+                f"💥 @{killer} eliminated @{victim} using '{word}'!"
+            )
+
+            # DM
+            try:
+                tu = players[str(new_target)]["username"]
+                await context.bot.send_message(
+                    killer_id,
+                    f"🎯 New target: @{tu}\n🔪 Word: {new_word}"
+                )
+            except:
+                pass
+
             return
 
-        if not re.search(rf"\b{re.escape(kill_word)}\b", text):
-            continue
-
-        killer_name = info["username"]
-        victim_name = players[victim_id]["username"]
-
-        info["kills"] += 1
-        players[victim_id]["alive"] = False
-
-        # chain target + new word
-        new_target = players[victim_id]["target"]
-        new_word = random.choice(get_words_for_difficulty(data["difficulty"]))
-        info["target"] = new_target
-        info["kill_word"] = new_word
-
-        save(data)
-
-        await chat.send_message(
-            f"💥 @{killer_name} eliminated @{victim_name} using the word '{kill_word}'!"
-        )
-
-        try:
-            target_username = players[str(new_target)]["username"]
-            await context.bot.send_message(
-                killer_id,
-                f"🎯 New target: @{target_username}\n🔪 New word: '{new_word}'"
-            )
-        except Exception:
-            pass
-
-        return
-
-
-# ---------------------------------------------------------
-# MAIN
-# ---------------------------------------------------------
+# ---------------------- MAIN ----------------------
 def main():
     print(">>> main() started")
 
@@ -665,20 +491,18 @@ def main():
         connect_timeout=10,
         read_timeout=10,
         write_timeout=10,
-        pool_timeout=10,
+        pool_timeout=10
     )
-
-    BOT_TOKEN = "8069533921:AAExzWpIhvoVwobAr_76fXoTmaB7ihXk-EY"  # <<< put your real token here
 
     app = ApplicationBuilder().token(BOT_TOKEN).request(request).build()
 
     print(">>> polling starting...")
 
-    # PM + Group help
+    # Start/help
     app.add_handler(CommandHandler("start", start_or_help))
     app.add_handler(CommandHandler("help", start_or_help))
 
-    # Group commands
+    # Game
     app.add_handler(CommandHandler("startgame", startgame))
     app.add_handler(CommandHandler("forcestart", forcestart))
     app.add_handler(CommandHandler("leave", leave))
@@ -691,15 +515,14 @@ def main():
     app.add_handler(CommandHandler("rules", rules))
     app.add_handler(CommandHandler("status", status))
 
-    # Inline menu + join
+    # Join + menu
     app.add_handler(CallbackQueryHandler(join_game, pattern="^join$"))
     app.add_handler(CallbackQueryHandler(menu_callback, pattern="^(how_play|tutorial|lb_pm)$"))
 
     # Kill detection
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), check_message))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, check_message))
 
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
